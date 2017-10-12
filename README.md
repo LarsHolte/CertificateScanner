@@ -1,15 +1,15 @@
-## Certificate scanner
+# Certificate scanner
 
 Scan tool for finding and reporting installed SSL certificates.
 
-# Overview
+## Overview
 
  - Queries DNS server zones to find fully qualified domain names
  - Scans each domain name on known SSL ports (supports split DNS and server name indication)
  - Found certificates are added/updated to sql-table
  - Reports expiring certificates found last 24h by sending SNMP traps (v2)
  
-# Getting Started
+## Getting Started
 
  - If all prerequisites are met and you just want to run the scanner, download from [Releases](https://github.com/LarsHolte/CertificateScanner/releases/latest) and edit the .Config settings to suit your environment
  - .Config key explanation
@@ -23,7 +23,7 @@ Scan tool for finding and reporting installed SSL certificates.
  - The scanner is pre-configured to only report on certificates found the last 24 hours
  - All certificates within the expire period will be sent in the same trap message overwriting existing status where Critical > Warning > Normal
  
-# Prerequisites (host running the Certificate scanner)
+## Prerequisites (host running the Certificate scanner)
 
  - .NETFramework v4.5.2 minimum
  - Zone transfer permissions on the DNS server zones being queried
@@ -32,14 +32,14 @@ Scan tool for finding and reporting installed SSL certificates.
    - Add a table with the included makeTable.sql script
  - Access to a SNMP trap server, see SNMP Resources for SNMP setup
  
-# Dependencies for building
+## Dependencies for building
 
  - NuGet packages
    - Lextm.SharpSnmpLib (https://docs.sharpsnmp.com)
    - ARSoft.Tools.Net (https://github.com/alexreinert/ARSoft.Tools.Net)
 	 - BouncyCastle.Crypto (http://www.bouncycastle.org/csharp/) (required by ARSoft.Tools.Net)
 
-# SNMP Resources
+## SNMP Resources
 
  - Any SNMP trap capable server should be supported. It has been testet on a [Nagiox XI](https://www.nagios.com/products/nagios-xi/) installation.
 	- snmptt.conf - Nagios XI configuration file containing the fake OID translation rules
@@ -49,15 +49,16 @@ Scan tool for finding and reporting installed SSL certificates.
 	- [SNMP Traps - Understanding Trap Variables](https://support.nagios.com/kb/article/snmp-traps-understanding-trap-variables.html)
 	- [Nagios XI - SNMP Trap Tutorial](https://support.nagios.com/kb/article/nagios-xi-snmp-trap-tutorial.html)
 	
-# Known issues
+## Known issues
 
  - Zone transfers fails on zones with large number of records (usually above ~5000 answers)
 	
-# Improvement proposals
+## Improvement proposals
  
  - Switch to using LiteDB instead of MSSql for easier setup/portability
  - Add support for sending e-mail when thresholds are hit
  - Make a valid OID and MIB
+ - Make scanning multi-threaded to speed up the process
 
 # License
 
@@ -68,7 +69,4 @@ This project is licensed under the MIT License
  - [Lex Li](https://github.com/lextm) - Sharp SNMP Library
  - [Alexreinert](https://github.com/alexreinert) - C# DNS client/server and SPF Library 
  - [The Legion of the Bouncy Castle](http://www.bouncycastle.org/index.html) - Bouncy Castle Crypto APIs 
-
-	
-
 
