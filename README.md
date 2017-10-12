@@ -13,7 +13,7 @@ Scan tool for finding and reporting installed SSL certificates.
 
  - If all prerequisites are met and you just want to run the scanner, download from [Releases](https://github.com/LarsHolte/CertificateScanner/releases/latest) and edit the .Config settings to suit your environment
  - .Config key explanation
-   - "DNSServerZone##" : specifies which "<DNS Server IP>;<DNS Zone>" should be queried, add/remove lines as needed
+   - "DNSServerZone##" : specifies which "&lt;DNS Server IP&gt;;&lt;DNS Zone&gt;" should be queried, add/remove lines as needed
    - "Ports" : domain names found will be attempted contacted on these ports
    - "SNMPServer" : the SNMP server IP where traps will be sent
    - "SQLConnectionString" : connection string for connecting to the SQL database
