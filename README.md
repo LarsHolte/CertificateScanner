@@ -11,7 +11,7 @@ Scan tool for finding and reporting installed SSL certificates.
  
 # Getting Started
 
- - If all prerequisites are met and you just want to run the scanner, download from [Releases](releases/) and edit the .Config settings to suit your environment
+ - If all prerequisites are met and you just want to run the scanner, download from [Releases](https://github.com/LarsHolte/CertificateScanner/releases/latest) and edit the .Config settings to suit your environment
  - .Config key explanation
    - "DNSServerZone##" : specifies which "<DNS Server IP>;<DNS Zone>" should be queried, add/remove lines as needed
    - "Ports" : domain names found will be attempted contacted on these ports
