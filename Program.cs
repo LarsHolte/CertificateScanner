@@ -41,7 +41,6 @@ namespace CertificateScanner
         static void Main(string[] args)
         {
             #region ### CONFIGURATION ###
-            // Config
             string snmpServer = string.Empty;
             List<string> dnsServerZones = new List<string>();
             List<string> portsToScan = new List<string>();
@@ -86,7 +85,7 @@ namespace CertificateScanner
             else
                 File.WriteAllText(Globals.logLastRunFile, DateTime.Now.ToString()); // Create initial log file
             #endregion
-#if !DEBUG
+
             #region ### WORK - GET DNS RECORDS AND SCAN ###
             foreach (string dnsServerZone in dnsServerZones)
             {
@@ -160,7 +159,7 @@ namespace CertificateScanner
             }
             File.WriteAllText(Globals.logLastRunFile, DateTime.Now.ToString()); // Log updated successful run datetime
             #endregion
-#endif
+
             #region ### CHECK CERTIFICATES FOUND AND UPDATE TRAP STATUS ###
             StringBuilder sb = new StringBuilder();
             DataTable dtAllCerts = GetSQLCertificates();
