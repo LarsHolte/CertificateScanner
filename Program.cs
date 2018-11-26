@@ -23,7 +23,11 @@ namespace CertificateScanner
         public static string logLastRunFile = appStartPath.DirectoryName + @"\LogLastRun.txt";
         public static string logErrorsFile = appStartPath.DirectoryName + @"\LogErrors-DATE.txt";
         public static string sqlConnectionString = ""; // Read from .config
+        public static int httpWebRequestTimeout = 0; // Read from .config
         public static bool hasErrorsCompleting = false;
+
+        public static string certificatesLogTable = "certificatesLog";
+
     }
 
     class Program
@@ -36,11 +40,11 @@ namespace CertificateScanner
             uint result = DnsFlushResolverCache();
         }
 
-        public enum trapStatus { Normal = 1, Warning = 2, Critical = 3 }
+        public enum TrapStatus { Normal = 1, Warning = 2, Critical = 3 }
 
         static void Main(string[] args)
         {
-            #region ### CONFIGURATION ###
+#region ### CONFIGURATION ###
             string snmpServer = string.Empty;
             List<string> dnsServerZones = new List<string>();
             List<string> portsToScan = new List<string>();
@@ -57,6 +61,7 @@ namespace CertificateScanner
                 maxErrorDaysThreshold = int.Parse(ConfigurationManager.AppSettings["MaxErrorDaysThreshold"]);
                 maxDaysThresholdWarning = int.Parse(ConfigurationManager.AppSettings["MaxDaysThresholdWarning"]);
                 maxDaysThresholdCritical = int.Parse(ConfigurationManager.AppSettings["MaxDaysThresholdCritical"]);
+                Globals.httpWebRequestTimeout = int.Parse(ConfigurationManager.AppSettings["HttpWebRequestTimeout"]);
 
                 foreach (string key in ConfigurationManager.AppSettings)
                 {
@@ -68,9 +73,9 @@ namespace CertificateScanner
             {
                 WriteLog("ERR: Main() failed to read configuration Exception: " + ex.ToString());
             }
-            #endregion
+#endregion
 
-            #region ### LAST RUN CHECK ###
+#region ### LAST RUN CHECK ###
             // Last run check, send trap if we have been unable to complete a certificate scan for X days
             DateTime lastRun = new DateTime();
             if (File.Exists(Globals.logLastRunFile))
@@ -78,15 +83,15 @@ namespace CertificateScanner
                 lastRun = DateTime.Parse(File.ReadAllText(Globals.logLastRunFile));
                 if (lastRun.AddDays(maxErrorDaysThreshold) < DateTime.Now)
                 {
-                    SendTrap(snmpServer, trapStatus.Critical, "Certificate scanner has not completed a certificate scan for over " + maxErrorDaysThreshold.ToString() + " days, check error logs!");
+                    SendTrap(snmpServer, TrapStatus.Critical, "Certificate scanner has not completed a certificate scan for over " + maxErrorDaysThreshold.ToString() + " days, check error logs!");
                     Globals.hasErrorsCompleting = true; // Set so we dont overwrite snmp status unless we are able to successfully complete
                 }
             }
             else
                 File.WriteAllText(Globals.logLastRunFile, DateTime.Now.ToString()); // Create initial log file
-            #endregion
+#endregion
 
-            #region ### WORK - GET DNS RECORDS AND SCAN ###
+#region ### WORK - GET DNS RECORDS AND SCAN ###
             foreach (string dnsServerZone in dnsServerZones)
             {
                 FlushDNSCache(); // Flush dns cache
@@ -100,7 +105,7 @@ namespace CertificateScanner
                 dtDNSrecs.Columns.Add("dnsServerIP");
                 dtDNSrecs.Columns.Add("dnsZone");
 
-                DnsClient dnsCli = new DnsClient(IPAddress.Parse(dnsServerIP), 60000); // DNSServer to query and ms timeout value
+                DnsClient dnsCli = new DnsClient(IPAddress.Parse(dnsServerIP), 300000); // DNSServer to query and ms timeout value - 5 min
                 DnsMessage dnsMessage = dnsCli.Resolve(DomainName.Parse(dnsZone), RecordType.Axfr); // Zone transfer query
                 if ((dnsMessage == null) || ((dnsMessage.ReturnCode != ReturnCode.NoError) && (dnsMessage.ReturnCode != ReturnCode.NxDomain)))
                 {
@@ -115,9 +120,11 @@ namespace CertificateScanner
                             ARecord aRecord = dnsRecord as ARecord;
                             if (aRecord != null)
                             {
-                                // Optionally: Skip known entries, eg. dynamically updated computer pc objects
-                                //if (aRecord.Name.ToString().StartsWith("MININT") || aRecord.Name.ToString().StartsWith("SVG-"))
-                                //    continue;
+                                // Optional: Skip known records, eg. dynamically updated computer pc objects
+                                string RecToLower = aRecord.Name.ToString().ToLower();
+                                if (RecToLower.StartsWith("minint") || RecToLower.StartsWith("svg") || RecToLower.StartsWith("sql") || RecToLower.StartsWith("admctx") || RecToLower.StartsWith("senctx") || RecToLower.StartsWith("xrx") || RecToLower.StartsWith("sql-") || RecToLower.StartsWith("ora-"))
+                                    continue;
+
                                 DataRow newRow = dtDNSrecs.NewRow();
                                 newRow["hostnameFQDN"] = aRecord.Name;
                                 newRow["endpoint"] = aRecord.Address;
@@ -158,9 +165,9 @@ namespace CertificateScanner
                 }
             }
             File.WriteAllText(Globals.logLastRunFile, DateTime.Now.ToString()); // Log updated successful run datetime
-            #endregion
+#endregion
 
-            #region ### CHECK CERTIFICATES FOUND AND UPDATE TRAP STATUS ###
+#region ### CHECK CERTIFICATES FOUND AND UPDATE TRAP STATUS ###
             StringBuilder sb = new StringBuilder();
             DataTable dtAllCerts = GetSQLCertificates();
             DataView dvCertificates = new DataView(dtAllCerts);
@@ -175,31 +182,31 @@ namespace CertificateScanner
                 {
                     sb.Append("(" + drv["expiresDays"] + ":" + drv["hostnameFQDN"] + ":" + drv["endpoint"] + ")");
                 }
-                SendTrap(snmpServer, trapStatus.Critical, sb.ToString());
+                SendTrap(snmpServer, TrapStatus.Critical, sb.ToString());
             }
             else
             {
                 dvCertificates.RowFilter = "expiresDays <= " + maxDaysThresholdWarning.ToString();
-                if (dvCertificates.Count > 0) // Check for warning
+                if (dvCertificates.Count > 0) // Send trap for warning
                 {
                     sb.Append("EXPIRING (DAYS:DOMAINNAME:ENDPOINT) ");
                     foreach (DataRowView drv in dvCertificates)
                     {
                         sb.Append("(" + drv["expiresDays"] + ":" + drv["hostnameFQDN"] + ":" + drv["endpoint"] + ")");
                     }
-                    SendTrap(snmpServer, trapStatus.Warning, sb.ToString());
+                    SendTrap(snmpServer, TrapStatus.Warning, sb.ToString());
                 }
             }
             // No warning, critical or errors => send OK
             if (dvCertificates.Count == 0 && !Globals.hasErrorsCompleting)
             {
                 sb.Append("OK. No certificates found expiring in the next " + maxDaysThresholdWarning.ToString() + " days.");
-                SendTrap(snmpServer, trapStatus.Normal, sb.ToString());
+                SendTrap(snmpServer, TrapStatus.Normal, sb.ToString());
             }
-            #endregion
+#endregion
         }
 
-        public static void SendTrap(string serverIp, trapStatus status, string message)
+        public static void SendTrap(string serverIp, TrapStatus status, string message)
         {
             try
             {
@@ -225,7 +232,7 @@ namespace CertificateScanner
                 {
                     SqlDataAdapter da = new SqlDataAdapter("SELECT  hostnameFQDN, endpoint, expiresDays " +
                                                            "FROM            certificatesLog " +
-                                                           "WHERE lastScannedDate > '" + GetDateTimeSQLString(DateTime.Now.AddDays(-1)) + "'", connection);
+                                                           "WHERE (lastScannedDate > '" + GetDateTimeSQLString(DateTime.Now.AddDays(-1)) + "') AND (ignore = 0)", connection);
                     da.Fill(dt);
                 }
             }
@@ -235,28 +242,27 @@ namespace CertificateScanner
             }
             return dt;
         }
-        private static void ScanForCertificate(string hostnameFQDN, string endpoint, string portNumber, string dnsServerIP, string dnsServerZone)
+        private static void ScanForCertificate(string hostnameFQDN, string endpoint, string port, string dnsServerIP, string dnsServerZone)
         {
-
             try
             {
                 // Ignore SSL errors
                 ServicePointManager.ServerCertificateValidationCallback = new System.Net.Security.RemoteCertificateValidationCallback(AcceptAllCertifications);
 
-                var ipUri = new UriBuilder(Uri.UriSchemeHttps, endpoint, int.Parse(portNumber)).Uri;
+                var ipUri = new UriBuilder(Uri.UriSchemeHttps, endpoint, int.Parse(port)).Uri;
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(ipUri);
                 request.Host = hostnameFQDN;
 
                 request.AllowAutoRedirect = false;
-                request.Timeout = 5000; // 5s timeout
+                request.Timeout = Globals.httpWebRequestTimeout; // Timeout in ms configurable in .config
 
                 HttpWebResponse response = (HttpWebResponse)request.GetResponse();
                 response.Close();
 
-                // Getretrieve the ssl cert and assign it to an X509Certificate object
+                // Get the ssl cert and assign it to an X509Certificate object
                 X509Certificate cert = request.ServicePoint.Certificate;
 
-                //convert the X509Certificate to an X509Certificate2 object by passing it into the constructor
+                // Convert the X509Certificate to an X509Certificate2 object by passing it into the constructor
                 X509Certificate2 cert2 = new X509Certificate2(cert);
 
                 string issuerName = cert2.IssuerName.Name;
@@ -288,10 +294,10 @@ namespace CertificateScanner
                 //if (expiresDays < -30)
                 //    return;
 
-                // Check if certificate already exists in sql. Match on (hostnameFQDN && endpoint && serialnumber) to also identifiy split dns and server name indication scenarios
+                // Check if certificate already exists in sql. Match on hostnameFQDN && port && endpoint && serialnumber to identifiy split dns and server name indication scenarios
                 using (SqlConnection connection = new SqlConnection(Globals.sqlConnectionString))
                 {
-                    string sqlGetCertificateInfo = "SELECT COUNT(*) AS Expr1 FROM certificatesLog WHERE (hostnameFQDN = N'" + hostnameFQDN + "') AND (endpoint = N'" + endpoint + "') AND (serialNumber = N'" + serialNumber + "')";
+                    string sqlGetCertificateInfo = "SELECT COUNT(*) AS Expr1 FROM " + Globals.certificatesLogTable + " WHERE (hostnameFQDN = N'" + hostnameFQDN + "') AND (port = N'" + port + "') AND (endpoint = N'" + endpoint + "') AND (serialNumber = N'" + serialNumber + "')";
                     SqlCommand sqlCmd = new SqlCommand(sqlGetCertificateInfo, connection);
                     connection.Open();
                     int result = (int)sqlCmd.ExecuteScalar();
@@ -299,7 +305,7 @@ namespace CertificateScanner
                     {
                         alreadyRegisteredInSQL = true;
                         // Update LastScanned record in database
-                        string sqlUpdateCertificateInfoLastScanned = "UPDATE certificatesLog SET lastScannedDate = { fn NOW() }, expiresDays = @expiresDays, subjectAlternativeNames = @subjectAlternativeNames  WHERE (hostnameFQDN = @hostnameFQDN) AND (endpoint = @endpoint) AND (serialNumber = @serialNumber)";
+                        string sqlUpdateCertificateInfoLastScanned = "UPDATE " + Globals.certificatesLogTable + " SET lastScannedDate = { fn NOW() }, expiresDays = @expiresDays, subjectAlternativeNames = @subjectAlternativeNames  WHERE (hostnameFQDN = @hostnameFQDN) AND (endpoint = @endpoint) AND (serialNumber = @serialNumber)";
                         SqlCommand sqlCmd2 = new SqlCommand(sqlUpdateCertificateInfoLastScanned, connection);
                         sqlCmd2.Parameters.AddWithValue("@hostnameFQDN", hostnameFQDN);
                         sqlCmd2.Parameters.AddWithValue("@endpoint", endpoint);
@@ -316,13 +322,13 @@ namespace CertificateScanner
                     {
                         string validFromSQLTime = GetDateTimeSQLString(validFromDate);
                         string expiresDateSQLTime = GetDateTimeSQLString(expireDate);
-                        string sqlInsertCertificateInfo = "INSERT INTO certificatesLog " +
+                        string sqlInsertCertificateInfo = "INSERT INTO " + Globals.certificatesLogTable + " " +
                             "(hostnameFQDN, endpoint, port, dnsServerIP, dnsServerZone, serialNumber, issuerName, issuedTo, subjectName, validFromDate, expiresDate, expiresDays, signatureAlgorithm, subjectAlternativeNames) VALUES " +
-                            "(@hostnameFQDN, @endpoint, @targetPort, @dnsServerIP, @dnsServerZone, @serialNumber, @issuerName, @issuedTo , @subjectName, @validFromSQLTime, @expiresDateSQLTime, @expiresDays, @signatureAlgorithm, @subjectAlternativeNames)";
+                            "(@hostnameFQDN, @endpoint, @port, @dnsServerIP, @dnsServerZone, @serialNumber, @issuerName, @issuedTo , @subjectName, @validFromSQLTime, @expiresDateSQLTime, @expiresDays, @signatureAlgorithm, @subjectAlternativeNames)";
                         SqlCommand sqlCmd = new SqlCommand(sqlInsertCertificateInfo, connection);
                         sqlCmd.Parameters.AddWithValue("@hostnameFQDN", hostnameFQDN);
                         sqlCmd.Parameters.AddWithValue("@endpoint", endpoint);
-                        sqlCmd.Parameters.AddWithValue("@targetPort", portNumber);
+                        sqlCmd.Parameters.AddWithValue("@port", port);
                         sqlCmd.Parameters.AddWithValue("@dnsServerIP", dnsServerIP);
                         sqlCmd.Parameters.AddWithValue("@dnsServerZone", dnsServerZone);
                         sqlCmd.Parameters.AddWithValue("@serialNumber", serialNumber);
@@ -349,7 +355,7 @@ namespace CertificateScanner
             }
             catch (Exception ex)
             {
-                WriteLog("ERR: ScanForCertificate(" + hostnameFQDN + "," + endpoint + "," + portNumber + "," + dnsServerIP + "," + dnsServerZone + ") Exception: " + ex.ToString());
+                WriteLog("ERR: ScanForCertificate(" + hostnameFQDN + "," + endpoint + "," + port + "," + dnsServerIP + "," + dnsServerZone + ") Exception: " + ex.ToString());
             }
         }
         private static bool AcceptAllCertifications(object sender, System.Security.Cryptography.X509Certificates.X509Certificate certification, System.Security.Cryptography.X509Certificates.X509Chain chain, System.Net.Security.SslPolicyErrors sslPolicyErrors)

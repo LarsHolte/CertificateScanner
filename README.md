@@ -14,7 +14,8 @@ Scan tool for finding and reporting installed SSL certificates.
  - If all prerequisites are met and you just want to run the scanner, download from [Releases](https://github.com/LarsHolte/CertificateScanner/releases/latest) and edit the .Config settings to suit your environment
  - .Config key explanation
    - "DNSServerZone##" : specifies which "&lt;DNS Server IP&gt;;&lt;DNS Zone&gt;" should be queried, add/remove lines as needed
-   - "Ports" : domain names found will be attempted contacted on these ports
+   - "HttpWebRequestTimeout" : timeout in ms while each ip:port
+   - "Ports" : each domain name found will be scanned on these ports
    - "SNMPServer" : the SNMP server IP where traps will be sent
    - "SQLConnectionString" : connection string for connecting to the SQL database
    - "MaxErrorDaysThreshold" : If the scanner is unable to complete a full scan within this period it will send a Critical SNMP trap 
@@ -51,7 +52,7 @@ Scan tool for finding and reporting installed SSL certificates.
 	
 ## Known issues
 
- - Zone transfers fails on zones with large number of records (usually above ~5000 answers)
+ - None
 	
 ## Improvement proposals
  
@@ -60,13 +61,22 @@ Scan tool for finding and reporting installed SSL certificates.
  - Make a valid OID and MIB
  - Make scanning multi-threaded to speed up the process
 
-# License
+## License
 
 This project is licensed under the MIT License
 
-# Acknowledgments
+## Acknowledgments
 
  - [Lex Li](https://github.com/lextm) - Sharp SNMP Library
  - [Alexreinert](https://github.com/alexreinert) - C# DNS client/server and SPF Library 
  - [The Legion of the Bouncy Castle](http://www.bouncycastle.org/index.html) - Bouncy Castle Crypto APIs 
 
+### Changelog
+
+ - 1.0.0.1
+  - Added configurable timeout value "HttpWebRequestTimeout".
+  - Increased default DNS AXFR transfer timeout to 5 minutes to resolve large (20k+) zone queries timing out.
+  - Added sql column "ignore" (bit) to flag certificates we do not want snmp traps for (eg. self signed or test scenarios).
+  - Bugfix: servers with the same certificate installed on different ports was updating previously found, instead of adding new.
+- 1.0.0.0 
+  - Initial release

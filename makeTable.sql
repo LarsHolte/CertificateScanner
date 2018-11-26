@@ -26,12 +26,15 @@ CREATE TABLE [dbo].[certificatesLog](
 	[subjectAlternativeNames] [nvarchar](max) NULL,
 	[detectedDate] [datetime] NOT NULL,
 	[lastScannedDate] [datetime] NULL,
+	[ignore] [bit] NOT NULL,
 	[expireWarning1Sent] [datetime] NULL,
 	[expireWarning2Sent] [datetime] NULL,
 	[expireWarning4Sent] [datetime] NULL
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
-
 GO
 
 ALTER TABLE [dbo].[certificatesLog] ADD  CONSTRAINT [DF_certificatesLog_certificateFirstDetected]  DEFAULT (getdate()) FOR [detectedDate]
+GO
+
+ALTER TABLE [dbo].[certificatesLog] ADD  CONSTRAINT [DF_certificatesLog_ignore]  DEFAULT ((0)) FOR [ignore]
 GO
