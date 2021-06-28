@@ -3,6 +3,9 @@
 # or wget:
 # wget --no-check-certificate http://gist.githubusercontent.com/kmorcinek/2710267/raw/.gitignore
 
+# Production configuration
+[Aa]pp.config
+
 # User-specific files
 *.suo
 *.user

@@ -1,6 +1,4 @@
-﻿using ARSoft.Tools.Net;
-using ARSoft.Tools.Net.Dns;
-using Lextm.SharpSnmpLib;
+﻿using Lextm.SharpSnmpLib;
 using Lextm.SharpSnmpLib.Messaging;
 using System;
 using System.Collections.Generic;
@@ -14,6 +12,12 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using Microsoft.Rest.Azure.Authentication;
+using Microsoft.Azure.Management.Dns;
+using System.Threading.Tasks;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using System.Net.Mail;
 
 namespace CertificateScanner
 {
@@ -21,13 +25,28 @@ namespace CertificateScanner
     {
         public static FileInfo appStartPath = new FileInfo(new Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
         public static string logLastRunFile = appStartPath.DirectoryName + @"\LogLastRun.txt";
-        public static string logErrorsFile = appStartPath.DirectoryName + @"\LogErrors-DATE.txt";
-        public static string sqlConnectionString = ""; // Read from .config
-        public static int httpWebRequestTimeout = 0; // Read from .config
+        public static string logFile = appStartPath.DirectoryName + @"\logs\DATE.txt";
         public static bool hasErrorsCompleting = false;
-
         public static string certificatesLogTable = "certificatesLog";
 
+        // Read from App.config
+        public static string tenantId;
+        public static string clientId;
+        public static string secret;
+        public static List<string> portsToScan;
+        public static List<string> filters = new List<string>();
+        public static string sendEmailNotification;
+        public static string smtpServer;
+        public static string smtpUsername;
+        public static string smtpPassword;
+        public static string smtpFromAddress;
+        public static string smtpToAddresses;
+        public static string sendTrapNotification;
+        public static string sqlConnectionString;
+        public static int httpWebRequestTimeout;
+
+        // DataTable to store DNS records found in the different zones
+        public static DataTable dtDNSrecs = new DataTable();
     }
 
     class Program
@@ -40,14 +59,23 @@ namespace CertificateScanner
             uint result = DnsFlushResolverCache();
         }
 
+        public enum LogLevel { Trace = 0, Debug = 1, Information = 2, Warning = 3, Error = 4, Critical = 5, None = 6 }
+        public static LogLevel logLevel = LogLevel.Information;
         public enum TrapStatus { Normal = 1, Warning = 2, Critical = 3 }
 
-        static void Main(string[] args)
+        static async Task Main()
         {
-#region ### CONFIGURATION ###
+            Globals.dtDNSrecs.Columns.Add("hostnameFQDN");
+            Globals.dtDNSrecs.Columns.Add("endpoint");
+            Globals.dtDNSrecs.Columns.Add("dnsServerIP");
+            Globals.dtDNSrecs.Columns.Add("dnsZone");
+
+            Directory.CreateDirectory(Globals.appStartPath.DirectoryName + @"\logs");
+
+            #region ### CONFIGURATION ###
             string snmpServer = string.Empty;
+            List<string> azureDnsServerZones = new List<string>();
             List<string> dnsServerZones = new List<string>();
-            List<string> portsToScan = new List<string>();
             int maxErrorDaysThreshold = 0;
             int maxDaysThresholdWarning = 0;
             int maxDaysThresholdCritical = 0;
@@ -55,23 +83,36 @@ namespace CertificateScanner
             {
                 Configuration configManager = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None);
                 KeyValueConfigurationCollection confCollection = configManager.AppSettings.Settings;
-                portsToScan = ConfigurationManager.AppSettings["Ports"].Split(',').ToList();
+                Globals.tenantId = ConfigurationManager.AppSettings["TenantId"];
+                Globals.clientId = ConfigurationManager.AppSettings["ClientId"];
+                Globals.secret = ConfigurationManager.AppSettings["Secret"];
+                Globals.portsToScan = ConfigurationManager.AppSettings["Ports"].Split(',').ToList();
+                Globals.sendEmailNotification = ConfigurationManager.AppSettings["SendEmailNotification"];
+                Globals.smtpServer = ConfigurationManager.AppSettings["SMTPServer"];
+                Globals.smtpUsername = ConfigurationManager.AppSettings["SMTPUsername"];
+                Globals.smtpPassword = ConfigurationManager.AppSettings["SMTPPassword"];
+                Globals.smtpFromAddress = ConfigurationManager.AppSettings["SMTPFromAddress"];
+                Globals.smtpToAddresses = ConfigurationManager.AppSettings["SMTPToAddresses"];
+                Globals.sendTrapNotification = ConfigurationManager.AppSettings["SendTrapNotification"];
                 snmpServer = ConfigurationManager.AppSettings["SNMPServer"];
                 Globals.sqlConnectionString = ConfigurationManager.AppSettings["SQLConnectionString"];
                 maxErrorDaysThreshold = int.Parse(ConfigurationManager.AppSettings["MaxErrorDaysThreshold"]);
                 maxDaysThresholdWarning = int.Parse(ConfigurationManager.AppSettings["MaxDaysThresholdWarning"]);
                 maxDaysThresholdCritical = int.Parse(ConfigurationManager.AppSettings["MaxDaysThresholdCritical"]);
                 Globals.httpWebRequestTimeout = int.Parse(ConfigurationManager.AppSettings["HttpWebRequestTimeout"]);
-
+                Enum.TryParse(ConfigurationManager.AppSettings["LogLevel"], out LogLevel logLevel);
                 foreach (string key in ConfigurationManager.AppSettings)
                 {
                     if (key.ToLower().StartsWith("dnsserverzone"))
                         dnsServerZones.Add(ConfigurationManager.AppSettings[key]);
+                    if (key.ToLower().StartsWith("regexfilter"))
+                        Globals.filters.Add(ConfigurationManager.AppSettings[key]);
                 }
             }
             catch (Exception ex)
             {
-                WriteLog("ERR: Main() failed to read configuration Exception: " + ex.ToString());
+                if (logLevel <= LogLevel.Error)
+                    WriteLog("ERR: Failed to read configuration Exception: " + ex.ToString());
             }
 #endregion
 
@@ -83,129 +124,334 @@ namespace CertificateScanner
                 lastRun = DateTime.Parse(File.ReadAllText(Globals.logLastRunFile));
                 if (lastRun.AddDays(maxErrorDaysThreshold) < DateTime.Now)
                 {
-                    SendTrap(snmpServer, TrapStatus.Critical, "Certificate scanner has not completed a certificate scan for over " + maxErrorDaysThreshold.ToString() + " days, check error logs!");
+                    if (Globals.sendTrapNotification == "1")
+                    {
+                        SendTrap(snmpServer, TrapStatus.Critical, "Certificate scanner has not completed a certificate scan for over " + maxErrorDaysThreshold.ToString() + " days, check error logs!");
+                    }
+                    if (Globals.sendEmailNotification == "1")
+                    {
+                        string mailBody = "CertificateScanner has been unable to complete a scan in " + maxErrorDaysThreshold.ToString() + " days. If the scanner is scheduled to run less frequent than the value of MaxErrorDaysThreshold in App.config, consider raising that value, or run the scanner more frequently.";
+                        SendEmail(Globals.smtpFromAddress, Globals.smtpToAddresses, "CertificateScanner failed for " + maxErrorDaysThreshold.ToString() + " days", mailBody, false);
+                    }
                     Globals.hasErrorsCompleting = true; // Set so we dont overwrite snmp status unless we are able to successfully complete
                 }
             }
             else
                 File.WriteAllText(Globals.logLastRunFile, DateTime.Now.ToString()); // Create initial log file
-#endregion
+            #endregion
 
 #region ### WORK - GET DNS RECORDS AND SCAN ###
             foreach (string dnsServerZone in dnsServerZones)
             {
-                FlushDNSCache(); // Flush dns cache
-
-                string dnsServerIP = dnsServerZone.Split(';')[0];
-                string dnsZone = dnsServerZone.Split(';')[1];
-
-                DataTable dtDNSrecs = new DataTable();
-                dtDNSrecs.Columns.Add("hostnameFQDN");
-                dtDNSrecs.Columns.Add("endpoint");
-                dtDNSrecs.Columns.Add("dnsServerIP");
-                dtDNSrecs.Columns.Add("dnsZone");
-
-                DnsClient dnsCli = new DnsClient(IPAddress.Parse(dnsServerIP), 300000); // DNSServer to query and ms timeout value - 5 min
-                DnsMessage dnsMessage = dnsCli.Resolve(DomainName.Parse(dnsZone), RecordType.Axfr); // Zone transfer query
-                if ((dnsMessage == null) || ((dnsMessage.ReturnCode != ReturnCode.NoError) && (dnsMessage.ReturnCode != ReturnCode.NxDomain)))
+                FlushDNSCache();
+                string dnsServerIP = String.Empty;
+                string dnsZone = String.Empty;
+                int recordsFound = 0;
+                if (dnsServerZone.ToLower().StartsWith("localdns"))
                 {
-                    WriteLog("ERR: Main() DNS zone request failed on server " + dnsServerIP + " zone " + dnsZone);
+                    dnsServerIP = dnsServerZone.Split(';')[1];
+                    dnsZone = dnsServerZone.Split(';')[2];
+                    string hostnameFQDN = String.Empty;
+                    string endpoint = String.Empty;
+                    List<string> output = new List<string>();
+                    if (logLevel <= LogLevel.Information)
+                        WriteLog("INF: Starting DNS zone transfer request on server " + dnsServerIP + " zone " + dnsZone);
+                    using (Process process = new Process())
+                    {
+                        process.StartInfo.FileName = "nslookup";
+                        process.StartInfo.UseShellExecute = false;
+                        process.StartInfo.RedirectStandardInput = true;
+                        process.StartInfo.RedirectStandardOutput = true;
+                        process.Start();
+                        process.StandardInput.WriteLine("server " + dnsServerIP);
+                        process.StandardInput.WriteLine("set type=ANY");
+                        process.StandardInput.WriteLine("ls -d " + dnsZone);
+                        process.StandardInput.WriteLine("exit");
+                        // Synchronously read the standard output of the spawned process.
+                        using (StreamReader reader = process.StandardOutput)
+                        {
+                            while (!reader.EndOfStream)
+                            {
+                                output.Add(reader.ReadLine());
+                            }
+                        }
+                        process.WaitForExit();
+                    }
+
+                    if (output == null)
+                    {
+                        if (logLevel <= LogLevel.Warning)
+                            WriteLog("WRN: DNS zone transfer request on server " + dnsServerIP + " zone " + dnsZone + " returned nothing.");
+                        continue;
+                    }
+
+                    foreach (string line in output)
+                    {
+                        if (line.Contains(" A      "))
+                        {
+                            hostnameFQDN = line.Substring(0, line.IndexOf(" A      ")).Trim() + "." + dnsZone;
+                            endpoint = line.Substring(line.IndexOf(" A      ") + 8, line.Length - (line.IndexOf(" A      ") + 8)).Trim();
+                        }
+                        else if (line.Contains(" CNAME  "))
+                        {
+                            hostnameFQDN = line.Substring(0, line.IndexOf(" CNAME  ")).Trim() + "." + dnsZone;
+                            endpoint = line.Substring(line.IndexOf(" CNAME  ") + 8, line.Length - (line.IndexOf(" CNAME  ") + 8)).Trim();
+                        }
+                        else
+                            continue;
+
+                        if (hostnameFQDN.Contains("..")) // Hardcoded filter to remove DNS server records
+                        {
+                            if (logLevel <= LogLevel.Debug)
+                                WriteLog("DBG: Excluded by default: " + hostnameFQDN);
+                            continue;
+                        }
+                        if (IsFqdnInFilter(hostnameFQDN))
+                        {
+                            if (logLevel <= LogLevel.Debug)
+                                WriteLog("DBG: Excluded by filter: " + hostnameFQDN);
+                            continue;
+                        }
+                        DataRow newRow = Globals.dtDNSrecs.NewRow();
+                        newRow["hostnameFQDN"] = hostnameFQDN;
+                        newRow["endpoint"] = endpoint;
+                        newRow["dnsServerIP"] = dnsServerIP;
+                        newRow["dnsZone"] = dnsZone;
+                        Globals.dtDNSrecs.Rows.Add(newRow);
+                        recordsFound++;
+                    }
+                    if (logLevel <= LogLevel.Information)
+                        WriteLog("INF: Finished DNS zone transfer request on server " + dnsServerIP + " zone " + dnsZone + ". " + recordsFound.ToString() + " A and CNAME records added to scan list");
+                }
+                else if (dnsServerZone.ToLower().StartsWith("azuredns"))
+                {
+                    
+                    string subscriptionId = dnsServerZone.Split(';')[1];
+                    string resourceGroupName = dnsServerZone.Split(';')[2];
+                    dnsZone = dnsServerZone.Split(';')[3];
+                    if (logLevel <= LogLevel.Information)
+                        WriteLog("INF: Starting AzureDNS query on " + dnsZone + " in resource group " + resourceGroupName);
+                    recordsFound = await GetAzureDNSRecords(subscriptionId, resourceGroupName, dnsZone);
+                    if (logLevel <= LogLevel.Information)
+                        WriteLog("INF: Finished AzureDNS query on " + dnsZone + " in resource group " + resourceGroupName + ". " + recordsFound.ToString() + " A and CNAME records added to scan list");
                 }
                 else
                 {
-                    foreach (DnsRecordBase dnsRecord in dnsMessage.AnswerRecords)
-                    {
-                        if (dnsRecord.RecordType == RecordType.A)
-                        {
-                            ARecord aRecord = dnsRecord as ARecord;
-                            if (aRecord != null)
-                            {
-                                // Optional: Skip known records, eg. dynamically updated computer pc objects
-                                string RecToLower = aRecord.Name.ToString().ToLower();
-                                if (RecToLower.StartsWith("minint") || RecToLower.StartsWith("svg") || RecToLower.StartsWith("sql") || RecToLower.StartsWith("admctx") || RecToLower.StartsWith("senctx") || RecToLower.StartsWith("xrx") || RecToLower.StartsWith("sql-") || RecToLower.StartsWith("ora-"))
-                                    continue;
+                    if(logLevel <= LogLevel.Error) 
+                        WriteLog("ERR: App.config DNSServerZone entry misconfigured: \"" + dnsServerZone + "\"");
+                }
+            }
+            if (logLevel <= LogLevel.Information)
+                WriteLog("INF: Starting scan of " + Globals.dtDNSrecs.Rows.Count.ToString() + " A and CNAME records on ports " + string.Join(",", Globals.portsToScan));
 
-                                DataRow newRow = dtDNSrecs.NewRow();
-                                newRow["hostnameFQDN"] = aRecord.Name;
-                                newRow["endpoint"] = aRecord.Address;
-                                newRow["dnsServerIP"] = dnsServerIP;
-                                newRow["dnsZone"] = dnsZone;
-                                dtDNSrecs.Rows.Add(newRow);
-                            }
-                        }
-                        else if (dnsRecord.RecordType == RecordType.CName)
-                        {
-                            CNameRecord cnameRecord = dnsRecord as CNameRecord;
-                            if (cnameRecord != null)
-                            {
-                                DataRow newRow = dtDNSrecs.NewRow();
-                                newRow["hostnameFQDN"] = cnameRecord.Name;
-                                newRow["endpoint"] = cnameRecord.CanonicalName;
-                                newRow["dnsServerIP"] = dnsServerIP;
-                                newRow["dnsZone"] = dnsZone;
-                                dtDNSrecs.Rows.Add(newRow);
-                            }
-                        }
-                    }
-                }
-                
-                // Scan all A and CNAME records on known ports for certificates
-                foreach (string port in portsToScan)
+            var tasks = new List<Task>();
+
+            // Add tasks for each port+ip to scan
+            foreach (string port in Globals.portsToScan)
+            {
+                foreach (DataRow row in Globals.dtDNSrecs.Rows)
                 {
-                    foreach (DataRow row in dtDNSrecs.Rows)
-                    {
-                        string hostnameFQDN = row["hostnameFQDN"].ToString();
-                        if (hostnameFQDN.EndsWith("."))
-                            hostnameFQDN = hostnameFQDN.Remove(hostnameFQDN.Length - 1);
-                        string endpoint = row["endpoint"].ToString();
-                        if (endpoint.EndsWith("."))
-                            endpoint = endpoint.Remove(endpoint.Length - 1);
-                        ScanForCertificate(hostnameFQDN, endpoint, port, dnsServerIP, dnsZone);
-                    }
+                    string hostnameFQDN = row["hostnameFQDN"].ToString();
+                    if (hostnameFQDN.EndsWith("."))
+                        hostnameFQDN = hostnameFQDN.Remove(hostnameFQDN.Length - 1);
+                    string endpoint = row["endpoint"].ToString();
+                    if (endpoint.EndsWith("."))
+                        endpoint = endpoint.Remove(endpoint.Length - 1);
+                    tasks.Add(Task.Run(() => { ScanForCertificate(hostnameFQDN, endpoint, port, row["dnsServerIP"].ToString(), row["dnsZone"].ToString()); }));
                 }
+            }
+            Task t = Task.WhenAll(tasks);
+            try
+            {
+                t.Wait();
+            }
+            catch { }
+            if (t.Status == TaskStatus.RanToCompletion)
+            {
+                if (logLevel <= LogLevel.Information)
+                    WriteLog("INF: Scan completed successfully");
+            }
+            else if (t.Status == TaskStatus.Faulted)
+            {
+                if (logLevel <= LogLevel.Information)
+                    WriteLog("INF: Scan completed with errors");
             }
             File.WriteAllText(Globals.logLastRunFile, DateTime.Now.ToString()); // Log updated successful run datetime
 #endregion
 
-#region ### CHECK CERTIFICATES FOUND AND UPDATE TRAP STATUS ###
+#region ### CHECK CERTIFICATES FOUND AND SEND NOTIFICATION ###
             StringBuilder sb = new StringBuilder();
-            DataTable dtAllCerts = GetSQLCertificates();
-            DataView dvCertificates = new DataView(dtAllCerts);
-
-            dvCertificates.Sort = "expiresDays ASC";
-            dvCertificates.RowFilter = "expiresDays <= " + maxDaysThresholdCritical.ToString();
-
-            if (dvCertificates.Count > 0) // Send trap for critical
+            DataTable dtAllCerts = GetSQLCertificates(); // Certificates found last 24h and ignore=0
+            DataView dvCertificates = new DataView(dtAllCerts)
             {
-                sb.Append("EXPIRING (DAYS:DOMAINNAME:ENDPOINT) ");
-                foreach (DataRowView drv in dvCertificates)
-                {
-                    sb.Append("(" + drv["expiresDays"] + ":" + drv["hostnameFQDN"] + ":" + drv["endpoint"] + ")");
-                }
-                SendTrap(snmpServer, TrapStatus.Critical, sb.ToString());
-            }
-            else
+                Sort = "expiresDays ASC"
+            };
+            if (Globals.sendTrapNotification == "1")
             {
-                dvCertificates.RowFilter = "expiresDays <= " + maxDaysThresholdWarning.ToString();
-                if (dvCertificates.Count > 0) // Send trap for warning
+                dvCertificates.RowFilter = "expiresDays <= " + maxDaysThresholdCritical.ToString();
+                if (dvCertificates.Count > 0) // Send trap for critical
                 {
                     sb.Append("EXPIRING (DAYS:DOMAINNAME:ENDPOINT) ");
                     foreach (DataRowView drv in dvCertificates)
                     {
                         sb.Append("(" + drv["expiresDays"] + ":" + drv["hostnameFQDN"] + ":" + drv["endpoint"] + ")");
                     }
-                    SendTrap(snmpServer, TrapStatus.Warning, sb.ToString());
+                    SendTrap(snmpServer, TrapStatus.Critical, sb.ToString());
+                }
+                else
+                {
+                    dvCertificates.RowFilter = "expiresDays <= " + maxDaysThresholdWarning.ToString();
+                    if (dvCertificates.Count > 0) // Send trap for warning
+                    {
+                        sb.Append("EXPIRING (DAYS:DOMAINNAME:ENDPOINT) ");
+                        foreach (DataRowView drv in dvCertificates)
+                        {
+                            sb.Append("(" + drv["expiresDays"] + ":" + drv["hostnameFQDN"] + ":" + drv["endpoint"] + ")");
+                        }
+                        SendTrap(snmpServer, TrapStatus.Warning, sb.ToString());
+                    }
+                }
+                // No warning, critical or errors => send OK
+                if (dvCertificates.Count == 0 && !Globals.hasErrorsCompleting)
+                {
+                    sb.Append("OK. No certificates found expiring in the next " + maxDaysThresholdWarning.ToString() + " days.");
+                    SendTrap(snmpServer, TrapStatus.Normal, sb.ToString());
                 }
             }
-            // No warning, critical or errors => send OK
-            if (dvCertificates.Count == 0 && !Globals.hasErrorsCompleting)
+
+            if (Globals.sendEmailNotification == "1")
             {
-                sb.Append("OK. No certificates found expiring in the next " + maxDaysThresholdWarning.ToString() + " days.");
-                SendTrap(snmpServer, TrapStatus.Normal, sb.ToString());
+                sb.Clear();
+                dvCertificates.RowFilter = "expiresDays <= " + maxDaysThresholdCritical.ToString() + " AND expireWarning2Sent IS NULL";
+                DataTable dtCritCert = dvCertificates.ToTable(false, "hostnameFQDN", "endpoint", "port", "dnsServerIP", "serialNumber", "issuerName", "issuedTo", "subjectName", "validFromDate", "expiresDate", "expiresDays", "detectedDate", "id");
+                if (dtCritCert.Rows.Count > 0)
+                {
+                    sb.AppendLine("Certificates expiring in " + maxDaysThresholdCritical.ToString() + " days or less:");
+                    sb.AppendLine(MakeHtmlTable(dtCritCert));
+                }
+                dvCertificates.RowFilter = "expiresDays <= " + maxDaysThresholdWarning.ToString() + " AND expiresDays > " + maxDaysThresholdCritical.ToString() + " AND expireWarning1Sent IS NULL";
+                DataTable dtWarnCert = dvCertificates.ToTable(false, "hostnameFQDN", "endpoint", "port", "dnsServerIP", "serialNumber", "issuerName", "issuedTo", "subjectName", "validFromDate", "expiresDate", "expiresDays", "detectedDate", "id");
+                if (dtWarnCert.Rows.Count > 0)
+                {
+                    sb.AppendLine("Certificates expiring in " + maxDaysThresholdWarning.ToString() + " days or less:");
+                    sb.AppendLine(MakeHtmlTable(dtWarnCert));
+                }
+                if (sb.Length > 0)
+                {
+                    if(SendEmail(Globals.smtpFromAddress, Globals.smtpToAddresses, "CertificateScanner expiring certificates report", sb.ToString(), false))
+                    {
+                        foreach (DataRow row in dtWarnCert.Rows)
+                        {
+                            UpdateSqlCertEmailSent("expireWarning1Sent", row["id"].ToString());
+                        }
+                        foreach (DataRow row in dtCritCert.Rows)
+                        {
+                            UpdateSqlCertEmailSent("expireWarning2Sent", row["id"].ToString());
+                        }
+                    }
+                }
             }
+
 #endregion
         }
-
+        private static void UpdateSqlCertEmailSent(string columnName, string id)
+        {
+            try
+            {
+                using (SqlConnection connection = new SqlConnection(Globals.sqlConnectionString))
+                {
+                    SqlCommand command = new SqlCommand("UPDATE certificatesLog SET " + columnName + " = GETDATE() WHERE (id = N'" + id + "')", connection);
+                    connection.Open();
+                    command.ExecuteNonQuery();
+                    connection.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                if (logLevel <= LogLevel.Warning)
+                    WriteLog("WRN: UpdateSqlCertEmailSent() Unable to datestamp id:" + id + ". Column:"+ columnName + ". Check SQL connection. Exception was: " + ex.ToString());
+            }
+        }
+        private static string MakeHtmlTable(DataTable dt)
+        {
+            string[] table = new string[dt.Rows.Count + 1];
+            long counter = 2;
+            table[0] = "<tr><th>" + string.Join("</th><th>", (from a_Col in dt.Columns.Cast<DataColumn>() select a_Col.ColumnName).ToArray()) + "</th></tr>";
+            foreach (DataRow row in dt.Rows)
+            {
+                table[counter - 1] = "<tr><td>" + String.Join("</td><td>", (from o in row.ItemArray select o.ToString()).ToArray()) + "</td></tr>";
+                counter += 1;
+            }
+            return "<table border=\"1\">" + String.Join("", table) + "</table></br>";
+        }
+        private static async Task<int> GetAzureDNSRecords(string subscriptionId, string resourceGroupName, string dnsZone)
+        {
+            int recordsFound = 0;
+            var serviceCreds = await ApplicationTokenProvider.LoginSilentAsync(Globals.tenantId, Globals.clientId, Globals.secret);
+            var dnsClient = new DnsManagementClient(serviceCreds)
+            {
+                SubscriptionId = subscriptionId
+            };
+            var page = await dnsClient.RecordSets.ListAllByDnsZoneAsync(resourceGroupName, dnsZone);
+            while (true)
+            {
+                foreach (var record in page)
+                {
+                    if (record.Type == "Microsoft.Network/dnszones/A")
+                    {
+                        foreach (var aRecord in record.ARecords)
+                        {
+                            if (IsFqdnInFilter(record.Fqdn))
+                            {
+                                if (logLevel <= LogLevel.Debug)
+                                    WriteLog("DBG: Excluded by filter: " + record.Fqdn);
+                                continue;
+                            }
+                            DataRow newRow = Globals.dtDNSrecs.NewRow();
+                            newRow["hostnameFQDN"] = record.Fqdn;
+                            newRow["endpoint"] = aRecord.Ipv4Address;
+                            newRow["dnsServerIP"] = resourceGroupName;
+                            newRow["dnsZone"] = dnsZone;
+                            Globals.dtDNSrecs.Rows.Add(newRow);
+                            recordsFound++;
+                        }
+                    }
+                    else if (record.Type == "Microsoft.Network/dnszones/CNAME")
+                    {
+                        if (IsFqdnInFilter(record.Fqdn))
+                        {
+                            if (logLevel <= LogLevel.Debug)
+                                WriteLog("DBG: Excluded by filter: " + record.Fqdn);
+                            continue;
+                        }
+                        DataRow newRow = Globals.dtDNSrecs.NewRow();
+                        newRow["hostnameFQDN"] = record.Fqdn;
+                        newRow["endpoint"] = record.CnameRecord.Cname;
+                        newRow["dnsServerIP"] = resourceGroupName;
+                        newRow["dnsZone"] = dnsZone;
+                        Globals.dtDNSrecs.Rows.Add(newRow);
+                        recordsFound++;
+                    }
+                }
+                if (string.IsNullOrEmpty(page.NextPageLink))
+                {
+                    break;
+                }
+                page = await dnsClient.RecordSets.ListAllByDnsZoneNextAsync(page.NextPageLink);
+            }
+            return recordsFound;
+        }
+        private static bool IsFqdnInFilter(string fqdn)
+        {
+            fqdn = fqdn.ToLower();
+            foreach (string filter in Globals.filters)
+            {
+                Regex exName = new Regex(filter);
+                if(exName.IsMatch(fqdn))
+                    return true;
+            }
+            return false;
+        }
         public static void SendTrap(string serverIp, TrapStatus status, string message)
         {
             try
@@ -216,12 +462,57 @@ namespace CertificateScanner
                 List<Variable> SNMPVariables = new List<Variable>();
                 Variable var1 = new Variable(oID, new OctetString(message));
                 SNMPVariables.Add(var1);
+#if !DEBUG
                 Messenger.SendTrapV2(0, VersionCode.V2, ipManager, new OctetString("public"), oID, 0, SNMPVariables);
+#endif
             }
             catch (Exception ex)
             {
-                WriteLog("ERR: SendTrap() Exception: " + ex.ToString());
+                if (logLevel <= LogLevel.Error)
+                    WriteLog("WRN: SendTrap() Exception: " + ex.ToString());
             }
+        }
+        public static bool SendEmail(string from, string commaSeperatedRecipients, string subject, string body, bool sendAsBcc)
+        {
+            try
+            {
+                MailMessage msg = new MailMessage();
+                MailAddressCollection recipientCollection = new MailAddressCollection();
+                foreach (string mailaddress in commaSeperatedRecipients.Split(new[] { "," }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    MailAddress recipient = new MailAddress(mailaddress);
+                    recipientCollection.Add(recipient);
+                }
+                MailAddress fromAddress = new MailAddress(from);
+                msg.From = fromAddress;
+                msg.Subject = subject;
+                msg.Body = body;
+                msg.IsBodyHtml = true;
+                if (sendAsBcc)
+                {
+                    msg.To.Add(fromAddress); // Set self as recipient
+                    msg.Bcc.Add(recipientCollection.ToString());
+                }
+                else
+                {
+                    msg.To.Add(recipientCollection.ToString());
+                }
+
+                var credential = new NetworkCredential(Globals.smtpUsername, Globals.smtpPassword);
+                SmtpClient client = new SmtpClient(Globals.smtpServer.Split(':')[0])
+                {
+                    Credentials = credential,
+                    Port = int.Parse(Globals.smtpServer.Split(':')[1])
+                };
+                client.Send(msg);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                if (logLevel <= LogLevel.Warning)
+                    WriteLog("WRN: SendEmail() exception: " + ex.ToString());
+            }
+            return false;
         }
         public static DataTable GetSQLCertificates()
         {
@@ -230,7 +521,7 @@ namespace CertificateScanner
             {
                 using (SqlConnection connection = new SqlConnection(Globals.sqlConnectionString))
                 {
-                    SqlDataAdapter da = new SqlDataAdapter("SELECT  hostnameFQDN, endpoint, expiresDays " +
+                    SqlDataAdapter da = new SqlDataAdapter("SELECT * " +
                                                            "FROM            certificatesLog " +
                                                            "WHERE (lastScannedDate > '" + GetDateTimeSQLString(DateTime.Now.AddDays(-1)) + "') AND (ignore = 0)", connection);
                     da.Fill(dt);
@@ -238,7 +529,8 @@ namespace CertificateScanner
             }
             catch (Exception ex)
             {
-                WriteLog("ERR: GetSQLCertificates() Exception: " + ex.ToString());
+                if (logLevel <= LogLevel.Warning)
+                    WriteLog("WRN: GetSQLCertificates() Exception: " + ex.ToString());
             }
             return dt;
         }
@@ -355,7 +647,8 @@ namespace CertificateScanner
             }
             catch (Exception ex)
             {
-                WriteLog("ERR: ScanForCertificate(" + hostnameFQDN + "," + endpoint + "," + port + "," + dnsServerIP + "," + dnsServerZone + ") Exception: " + ex.ToString());
+                if (logLevel <= LogLevel.Warning)
+                    WriteLog("WRN: ScanForCertificate(" + hostnameFQDN + "," + endpoint + "," + port + "," + dnsServerIP + "," + dnsServerZone + ") Exception: " + ex.ToString());
             }
         }
         private static bool AcceptAllCertifications(object sender, System.Security.Cryptography.X509Certificates.X509Certificate certification, System.Security.Cryptography.X509Certificates.X509Chain chain, System.Net.Security.SslPolicyErrors sslPolicyErrors)
@@ -373,19 +666,19 @@ namespace CertificateScanner
             try
             {
                 string logTime = DateTime.Now.ToString("yyyy-MM-dd");
-                string logFile = Globals.logErrorsFile.Replace("DATE", logTime);
+                string logFile = Globals.logFile.Replace("DATE", logTime);
                 string outputText = logTime + DateTime.Now.ToString(" HH:mm:ss ") + logText;
 #if !DEBUG
-                if (!System.IO.File.Exists(logFile))
+                if (!File.Exists(logFile))
                 {
-                    using (System.IO.StreamWriter sw = System.IO.File.CreateText(logFile))
+                    using (StreamWriter sw = File.CreateText(logFile))
                     {
                         sw.WriteLine(outputText);
                     }
                 }
                 else
                 {
-                    using (System.IO.StreamWriter sw = System.IO.File.AppendText(logFile))
+                    using (StreamWriter sw = File.AppendText(logFile))
                     {
                         sw.WriteLine(outputText);
                     }

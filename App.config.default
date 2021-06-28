@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <appSettings>
+    <!-- Azure config -->
+    <add key="TenantId" value="Tenant Id"/>
+    <add key="ClientId" value="Service account Id"/>
+    <add key="Secret" value="Service account pwd"/>
+    <!-- Azure DNS server zones (Type;Subscription Id;Resource group name;Zone name), add/remove keys as needed for each zone -->
+    <add key="DNSServerZone02" value="AzureDNS;8069fa22-d8e6-4a2c-be23-examplesubsc;rg-DNS;public-contoso.com"/>
+    <add key="DNSServerZone03" value="AzureDNS;8069fa22-d8e6-4a2c-be23-examplesubsc;rg-DNS-Other;fabrikam.com"/>
+    <!-- Local DNS server zones (Type;DNS server ip;Zone name), add/remove keys as needed for each zone -->
+    <add key="DNSServerZone04" value="LocalDNS;192.168.1.10;contoso.com"/>
+    <add key="DNSServerZone06" value="LocalDNS;192.168.1.10;subzone.contoso.com"/>
+    <add key="DNSServerZone07" value="LocalDNS;192.168.1.11;fabrikam.com" />
+    <!-- Timeout in ms waiting for webserver to respond -->
+    <add key="HttpWebRequestTimeout" value="5000" />
+    <!-- A and CNAME records found in the zones will be scanned on these ports -->
+    <add key="Ports" value="443,444,4443,4444,8009,8080,8100,8110,8443,9001" />
+    <!-- RegEx filters to exlude found A and CNAME records from being scanned, add/remove keys as needed. Remove filters to scan all -->
+    <add key="RegExFilter01" value="^(minint|desktop)" /> <!-- Starts with type filter -->
+    <add key="RegExFilter02" value="(tst|testserver\d)" /> <!-- Contains type filter -->
+    <!-- SMTP config -->
+    <add key="SendEmailNotification" value="1" />
+    <add key="SMTPServer" value="smtp.contoso.com:25" />
+    <add key="SMTPUsername" value="" />
+    <add key="SMTPPassword" value="" />
+    <add key="SMTPFromAddress" value="CertificateScanner@contoso.com" />
+    <add key="SMTPToAddresses" value="recipient@contoso.com" /> <!-- Use comma to seperate addresses if adding more than one -->
+    <!-- SNMP config -->
+    <add key="SendTrapNotification" value="1" />
+    <add key="SNMPServer" value="10.1.1.4" />
+    <!-- SQL config - replace DATABASEHOSTNAME, DATABASENAME, USERNAME, PASSWORD with your values -->
+    <add key="SQLConnectionString" value="Data Source=DATABASEHOSTNAME;Initial Catalog=DATABASENAME;Persist Security Info=True;User ID=USERNAME;Password=PASSWORD" />
+    <!-- If the scanner failes to complete a scan within this period, send a notification -->
+    <add key="MaxErrorDaysThreshold" value="3" />
+    <!-- Certificates within these expire thresholds will trigger sending email and/or snmp notifications if enabled -->
+    <add key="MaxDaysThresholdWarning" value="40" />
+    <add key="MaxDaysThresholdCritical" value="20" />
+    <!-- LogLevel - Trace = 0, Debug = 1, Information = 2, Warning = 3, Error = 4, Critical = 5, None = 6 -->
+    <add key="LogLevel" value="2" />
+  </appSettings>
+  <startup>
+    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.5.2"/>
+  </startup>
+  <runtime>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Newtonsoft.Json" publicKeyToken="30ad4fe6b2a6aeed" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-13.0.0.0" newVersion="13.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+  </runtime>
+</configuration>
