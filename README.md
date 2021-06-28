@@ -50,7 +50,7 @@ This project is licensed under the [MIT License](https://github.com/LarsHolte/Ce
 
 ## Changelog
 
- - 2.0.0.0
+- 2.0.0.0
   - Added support for AzureDNS
   - Added multithreading to speed up scanning (from ~1 port per 5 second to ~11 ports per second)
   - Added support for sending mail notifications
@@ -58,10 +58,10 @@ This project is licensed under the [MIT License](https://github.com/LarsHolte/Ce
   - Added using nslookup for zone transfers
   - Added configurable regex filtering to exclude DNS records from scan
   - Added configurable loglevel
- - 1.0.0.1
+- 1.0.0.1
   - Added configurable timeout value "HttpWebRequestTimeout".
   - Increased default DNS AXFR transfer timeout to 5 minutes to resolve large (20k+) zone queries timing out.
   - Added sql column "ignore" (bit) to flag certificates we do not want snmp traps for (eg. self signed or test scenarios).
   - Bugfix: servers with the same certificate installed on different ports was updating previously found, instead of adding new.
- - 1.0.0.0 
+- 1.0.0.0 
   - Initial release
