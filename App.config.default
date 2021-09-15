@@ -12,6 +12,8 @@
     <add key="DNSServerZone04" value="LocalDNS;192.168.1.10;contoso.com"/>
     <add key="DNSServerZone06" value="LocalDNS;192.168.1.10;subzone.contoso.com"/>
     <add key="DNSServerZone07" value="LocalDNS;192.168.1.11;fabrikam.com" />
+    <!-- Concurrent webrequests -->
+    <add key="ConcurrentWebRequests" value="24"/>
     <!-- Timeout in ms waiting for webserver to respond -->
     <add key="HttpWebRequestTimeout" value="5000" />
     <!-- A and CNAME records found in the zones will be scanned on these ports -->
@@ -40,13 +42,22 @@
     <add key="LogLevel" value="2" />
   </appSettings>
   <startup>
-    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.5.2"/>
+    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.7.2"/>
   </startup>
+  <system.net>
+    <settings>
+      <httpWebRequest useUnsafeHeaderParsing ="true"/>
+    </settings>
+  </system.net>
   <runtime>
     <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
       <dependentAssembly>
-        <assemblyIdentity name="Newtonsoft.Json" publicKeyToken="30ad4fe6b2a6aeed" culture="neutral" />
-        <bindingRedirect oldVersion="0.0.0.0-13.0.0.0" newVersion="13.0.0.0" />
+        <assemblyIdentity name="Newtonsoft.Json" publicKeyToken="30ad4fe6b2a6aeed" culture="neutral"/>
+        <bindingRedirect oldVersion="0.0.0.0-13.0.0.0" newVersion="13.0.0.0"/>
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.IdentityModel.Clients.ActiveDirectory" publicKeyToken="31bf3856ad364e35" culture="neutral"/>
+        <bindingRedirect oldVersion="0.0.0.0-5.2.9.0" newVersion="5.2.9.0"/>
       </dependentAssembly>
     </assemblyBinding>
   </runtime>
