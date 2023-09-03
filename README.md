@@ -29,17 +29,9 @@ Brute force scan tool for finding and reporting installed SSL certificates based
 ## SNMP Resources
 
  - Any SNMP trap capable server should be supported. It has been testet on a [Nagiox XI](https://www.nagios.com/products/nagios-xi/) installation.
-	- snmptt.conf - Nagios XI configuration file containing the fake OID translation rules
- - Nagios SNMP guides
+    - snmptt.conf - Nagios XI configuration file containing the fake OID translation rules
     - [How to Integrate SNMP Traps With Nagios XI](https://assets.nagios.com/downloads/nagiosxi/docs/Integrating_SNMP_Traps_With_Nagios_XI.pdf) (pdf)
-	- [SNMP Trap - snmptt Service](https://support.nagios.com/kb/article.php?id=89)
-	- [SNMP Traps - Understanding Trap Variables](https://support.nagios.com/kb/article/snmp-traps-understanding-trap-variables.html)
-	- [Nagios XI - SNMP Trap Tutorial](https://support.nagios.com/kb/article/nagios-xi-snmp-trap-tutorial.html)
-	
-## Improvement proposals
- 
- - Switch to using LiteDB instead of MSSql for easier setup/portability
-
+    
 ## License
 
 This project is licensed under the [MIT License](https://github.com/LarsHolte/CertificateScanner/blob/master/LICENSE)
@@ -50,7 +42,12 @@ This project is licensed under the [MIT License](https://github.com/LarsHolte/Ce
 
 ## Changelog
 
-- 2.1.0.0
+- 2.1.1.0 - 2023-09-03
+  - Updated to use certificates found by SNI first (webservers with mixed SNI sites on/off would only find the ip certificate)
+  - Added configurable sql table name
+  - Added more logging
+  - Bugfix: logLevel still not properly initialized
+- 2.1.0.0 - 2021-09-15
   - Updated to .NET Framework 4.7.2
   - Updated to use HttpClient instead of HttpWebRequest
   - Added configurable concurrent webrequests "ConcurrentWebRequests" to throttle tasks
@@ -60,7 +57,7 @@ This project is licensed under the [MIT License](https://github.com/LarsHolte/Ce
   - Bugfix: servers with the same certificate installed on different ports was updating both
   - Bugfix: logLevel not properly initialized
   - Bugfix: also set lastScannedDate on newly detected certificates
-- 2.0.0.0
+- 2.0.0.0 - 2021-06-28
   - Added support for AzureDNS
   - Added multithreading to speed up scanning (from ~1 port per 5 second to ~11 ports per second)
   - Added support for sending mail notifications
@@ -68,10 +65,10 @@ This project is licensed under the [MIT License](https://github.com/LarsHolte/Ce
   - Added using nslookup for zone transfers
   - Added configurable regex filtering to exclude DNS records from scan
   - Added configurable loglevel
-- 1.0.0.1
+- 1.0.0.1 - 2018-11-26
   - Added configurable timeout value "HttpWebRequestTimeout"
   - Increased default DNS AXFR transfer timeout to 5 minutes to resolve large (20k+) zone queries timing out
   - Added sql column "ignore" (bit) to flag certificates we do not want snmp traps for (eg. self signed or test scenarios)
   - Bugfix: servers with the same certificate installed on different ports was updating previously found, instead of adding new
-- 1.0.0.0 
+- 1.0.0.0 - 2017-10-12
   - Initial release

@@ -28,7 +28,6 @@ namespace CertificateScanner
         public static string logLastRunFile = appStartPath.DirectoryName + @"\LogLastRun.txt";
         public static string logFile = appStartPath.DirectoryName + @"\logs\DATE.txt";
         public static bool hasErrorsCompleting = false;
-        public static string certificatesLogTable = "certificatesLog";
 
         // Read from App.config
         public static string tenantId;
@@ -44,6 +43,7 @@ namespace CertificateScanner
         public static string smtpToAddresses;
         public static string sendTrapNotification;
         public static string sqlConnectionString;
+        public static string certificatesLogTable;
         public static int concurrentWebRequests;
         public static TimeSpan httpClientTimeout;
         
@@ -97,12 +97,13 @@ namespace CertificateScanner
                 Globals.sendTrapNotification = ConfigurationManager.AppSettings["SendTrapNotification"];
                 snmpServer = ConfigurationManager.AppSettings["SNMPServer"];
                 Globals.sqlConnectionString = ConfigurationManager.AppSettings["SQLConnectionString"];
+                Globals.certificatesLogTable = ConfigurationManager.AppSettings["SQLTable"];
                 maxErrorDaysThreshold = int.Parse(ConfigurationManager.AppSettings["MaxErrorDaysThreshold"]);
                 maxDaysThresholdWarning = int.Parse(ConfigurationManager.AppSettings["MaxDaysThresholdWarning"]);
                 maxDaysThresholdCritical = int.Parse(ConfigurationManager.AppSettings["MaxDaysThresholdCritical"]);
                 Globals.concurrentWebRequests = int.Parse(ConfigurationManager.AppSettings["ConcurrentWebRequests"]);
                 Globals.httpClientTimeout = TimeSpan.FromMilliseconds(int.Parse(ConfigurationManager.AppSettings["HttpClientTimeout"]));
-                Enum.TryParse(ConfigurationManager.AppSettings["LogLevel"], out LogLevel logLevel);
+                Enum.TryParse(ConfigurationManager.AppSettings["LogLevel"], out logLevel);
                 foreach (string key in ConfigurationManager.AppSettings)
                 {
                     if (key.ToLower().StartsWith("dnsserverzone"))
@@ -220,6 +221,8 @@ namespace CertificateScanner
                         newRow["dnsServerIP"] = dnsServerIP;
                         newRow["dnsZone"] = dnsZone;
                         Globals.dtDNSrecs.Rows.Add(newRow);
+                        if (logLevel <= LogLevel.Trace)
+                            WriteLog("TRC: Added record to scan: fqdn=" + hostnameFQDN + " endpoint=" + endpoint + " dnsserver=" + dnsServerIP + " dnszone=" + dnsZone);
                         recordsFound++;
                     }
                     if (logLevel <= LogLevel.Information)
@@ -275,7 +278,8 @@ namespace CertificateScanner
                     }
                 }
             }
-            WriteLog("INF: Script completed");
+            if (logLevel <= LogLevel.Information)
+                WriteLog("INF: Certificate scan finished");
             File.WriteAllText(Globals.logLastRunFile, DateTime.Now.ToString()); // Log updated successful run datetime
 #endregion
 
@@ -351,7 +355,10 @@ namespace CertificateScanner
                     }
                 }
             }
-        #endregion
+            if (logLevel <= LogLevel.Information)
+                WriteLog("INF: Script completed");
+
+            #endregion
         }
         private static void UpdateSqlCertEmailSent(string columnName, string id)
         {
@@ -359,7 +366,7 @@ namespace CertificateScanner
             {
                 using (SqlConnection connection = new SqlConnection(Globals.sqlConnectionString))
                 {
-                    SqlCommand command = new SqlCommand("UPDATE certificatesLog SET " + columnName + " = GETDATE() WHERE (id = N'" + id + "')", connection);
+                    SqlCommand command = new SqlCommand("UPDATE " + Globals.certificatesLogTable + " SET " + columnName + " = GETDATE() WHERE (id = N'" + id + "')", connection);
                     connection.Open();
                     command.ExecuteNonQuery();
                     connection.Close();
@@ -414,6 +421,8 @@ namespace CertificateScanner
                                 newRow["dnsServerIP"] = resourceGroupName;
                                 newRow["dnsZone"] = dnsZone;
                                 Globals.dtDNSrecs.Rows.Add(newRow);
+                                if (logLevel <= LogLevel.Trace)
+                                    WriteLog("TRC: Added A record to scan: fqdn=" + record.Fqdn + " endpoint=" + aRecord.Ipv4Address + " dnsserver=" + resourceGroupName + " dnszone=" + dnsZone);
                                 recordsFound++;
                             }
                         }
@@ -431,6 +440,8 @@ namespace CertificateScanner
                             newRow["dnsServerIP"] = resourceGroupName;
                             newRow["dnsZone"] = dnsZone;
                             Globals.dtDNSrecs.Rows.Add(newRow);
+                            if (logLevel <= LogLevel.Trace)
+                                WriteLog("TRC: Added CNAME record to scan: fqdn=" + record.Fqdn + " endpoint=" + record.CnameRecord.Cname + " dnsserver=" + resourceGroupName + " dnszone=" + dnsZone);
                             recordsFound++;
                         }
                     }
@@ -472,12 +483,14 @@ namespace CertificateScanner
                 SNMPVariables.Add(var1);
 #if !DEBUG
                 Messenger.SendTrapV2(0, VersionCode.V2, ipManager, new OctetString("public"), oID, 0, SNMPVariables);
+                if (logLevel <= LogLevel.Information)
+                    WriteLog("INF: Sent SNMP trap message \"" + message + "\" with status " + status.ToString() + " to SNMP server " + serverIp);
 #endif
             }
             catch (Exception ex)
             {
                 if (logLevel <= LogLevel.Error)
-                    WriteLog("WRN: SendTrap() Exception: " + ex.ToString());
+                    WriteLog("ERR: SendTrap() Exception: " + ex.ToString());
             }
         }
         public static bool SendEmail(string from, string commaSeperatedRecipients, string subject, string body, bool sendAsBcc)
@@ -513,12 +526,14 @@ namespace CertificateScanner
                     Port = int.Parse(Globals.smtpServer.Split(':')[1])
                 };
                 client.Send(msg);
+                if (logLevel <= LogLevel.Information)
+                    WriteLog("INF: Sent SMTP message to server " + Globals.smtpServer + " with subject \"" + subject + "\" to " + commaSeperatedRecipients);
                 return true;
             }
             catch (Exception ex)
             {
-                if (logLevel <= LogLevel.Warning)
-                    WriteLog("WRN: SendEmail() exception: " + ex.ToString());
+                if (logLevel <= LogLevel.Error)
+                    WriteLog("ERR: SendEmail() exception: " + ex.ToString());
             }
             return false;
         }
@@ -530,15 +545,15 @@ namespace CertificateScanner
                 using (SqlConnection connection = new SqlConnection(Globals.sqlConnectionString))
                 {
                     SqlDataAdapter da = new SqlDataAdapter("SELECT * " +
-                                                           "FROM            certificatesLog " +
+                                                           "FROM " + Globals.certificatesLogTable + " " +
                                                            "WHERE (lastScannedDate > '" + GetDateTimeSQLString(DateTime.Now.AddDays(-1)) + "') AND (ignore = 0)", connection);
                     da.Fill(dt);
                 }
             }
             catch (Exception ex)
             {
-                if (logLevel <= LogLevel.Warning)
-                    WriteLog("WRN: GetSQLCertificates() Exception: " + ex.ToString());
+                if (logLevel <= LogLevel.Error)
+                    WriteLog("ERR: GetSQLCertificates() Exception: " + ex.ToString());
             }
             return dt;
         }
@@ -572,35 +587,35 @@ namespace CertificateScanner
                 if (ex.Message == "An error occurred while sending the request." && ex.InnerException.Message == "Unable to connect to the remote server")
                 {
                     if (logLevel <= LogLevel.Trace) 
-                        WriteLog("TRC: GetServerCertificateAsync() known exception: Unable to connect to the remote server: " + url.Host);
+                        WriteLog("TRC: GetServerCertificateAsync() known exception: Unable to connect to the remote server: " + url.Host + ":" + url.Port);
                     return null;
                 }
                 if (ex.Message == "An error occurred while sending the request." && ex.InnerException.Message == "The underlying connection was closed: An unexpected error occurred on a send.")
                 {
                     if (logLevel <= LogLevel.Trace) 
-                        WriteLog("TRC: GetServerCertificateAsync() known exception: The underlying connection was closed: An unexpected error occurred on a send: " + url.Host);
+                        WriteLog("TRC: GetServerCertificateAsync() known exception: The underlying connection was closed: An unexpected error occurred on a send: " + url.Host + ":" + url.Port);
                     return null;
                 }
                 if (ex.Message == "An error occurred while sending the request." && ex.InnerException.Message == "The underlying connection was closed: An unexpected error occurred on a receive.")
                 {
                     if (logLevel <= LogLevel.Trace) 
-                        WriteLog("TRC: GetServerCertificateAsync() known exception: The underlying connection was closed: An unexpected error occurred on a receive: " + url.Host);
+                        WriteLog("TRC: GetServerCertificateAsync() known exception: The underlying connection was closed: An unexpected error occurred on a receive: " + url.Host + ":" + url.Port);
                     return null;
                 }
                 if (ex.Message == "An error occurred while sending the request." && ex.InnerException.Message == "The request was aborted: The request was canceled.")
                 {
                     if (logLevel <= LogLevel.Trace)
-                        WriteLog("TRC: GetServerCertificateAsync() known exception: The request was aborted: The request was canceled.: " + url.Host);
+                        WriteLog("TRC: GetServerCertificateAsync() known exception: The request was aborted: The request was canceled.: " + url.Host + ":" + url.Port);
                     return null;
                 }
                 if (ex.Message == "An error occurred while sending the request." && ex.InnerException.Message.Contains("The remote name could not be resolved"))
                 {
                     if (logLevel <= LogLevel.Trace)
-                        WriteLog("TRC: GetServerCertificateAsync() known exception: The remote name could not be resolved: " + url.Host);
+                        WriteLog("TRC: GetServerCertificateAsync() known exception: The remote name could not be resolved: " + url.Host + ":" + url.Port);
                     return null;
                 }
                 if (logLevel <= LogLevel.Trace)
-                    WriteLog("TRC: GetServerCertificateAsync() unknown HttpRequestException connecting to " + url.AbsoluteUri + " :" + ex.ToString());
+                    WriteLog("TRC: GetServerCertificateAsync() unknown HttpRequestException connecting to " + url.AbsoluteUri + ":" + url.Port + " :" + ex.ToString());
             }
             catch (TaskCanceledException ex)
             {
@@ -609,14 +624,14 @@ namespace CertificateScanner
                 {
                     // Timeouts - browsing these hosts usually return ERR_CONNECTION_TIMED_OUT
                     if (logLevel <= LogLevel.Trace)
-                        WriteLog("TRC: GetServerCertificateAsync() known exception: A task was canceled: " + url.Host);
+                        WriteLog("TRC: GetServerCertificateAsync() known exception: A task was canceled: " + url.Host + ":" + url.Port);
                     return null;
                 }
             }
             catch (Exception ex) 
             {
                 if(logLevel <= LogLevel.Warning)
-                    WriteLog("WRN: GetServerCertificateAsync() unknown Exception connecting to " + url.AbsoluteUri + " :" + ex.ToString());
+                    WriteLog("WRN: GetServerCertificateAsync() unknown Exception connecting to " + url.AbsoluteUri + ":" + url.Port + " :" + ex.ToString());
             }
             return null;
         }
@@ -624,32 +639,28 @@ namespace CertificateScanner
         {
             try
             {
+                Uri requestFqdnUri = new UriBuilder(Uri.UriSchemeHttps, hostnameFQDN, int.Parse(port)).Uri;
                 Uri requestIpUri = new UriBuilder(Uri.UriSchemeHttps, endpoint, int.Parse(port)).Uri;
-                X509Certificate2 cert2 = await GetServerCertificateAsync(requestIpUri);
-                if (cert2 == null) // No initial certificate found, retry with a hostnameFQDN request
+                X509Certificate2 cert2 = await GetServerCertificateAsync(requestFqdnUri);
+                if (cert2 == null) // No initial certificate found, retry with ip request
                 {
-                    Uri requestFqdnUri = new UriBuilder(Uri.UriSchemeHttps, hostnameFQDN, int.Parse(port)).Uri;
-                    cert2 = await GetServerCertificateAsync(requestFqdnUri);
+                    cert2 = await GetServerCertificateAsync(requestIpUri);
                     if (cert2 != null)
                     {
                         if (logLevel <= LogLevel.Information)
-                        {
-                            WriteLog("DBG: No certificate returned from Uri " + requestIpUri.AbsoluteUri + " but was found with Uri " + requestFqdnUri.AbsoluteUri);
-                        }
+                            WriteLog("INF: No certificate returned from Uri " + requestFqdnUri.AbsoluteUri + ":" + port + " but found on endpoint " + requestIpUri.AbsoluteUri + ":" + port);
                     }
                 }
                 else if ((cert2.SubjectName.Name.Contains(".azurewebsites.") || (cert2.SubjectName.Name.Contains(".msappproxy.")))) 
                 {
                     // Azure Webapps returns a *.azurewebsites.* certificate, and Azure app proxy a *.msappproxy.* certificate when querying by ip.
                     // Check if there is a custom domain certificate with a hostnameFQDN request, and use that if exists instead
-                    Uri requestFqdnUri = new UriBuilder(Uri.UriSchemeHttps, hostnameFQDN, int.Parse(port)).Uri;
+                    requestFqdnUri = new UriBuilder(Uri.UriSchemeHttps, hostnameFQDN, int.Parse(port)).Uri;
                     X509Certificate2 tempCertificate = await GetServerCertificateAsync(requestFqdnUri);
                     if (tempCertificate != null)
                     {
                         if (logLevel <= LogLevel.Information)
-                        {
-                            WriteLog("INF: Azure certificate found on Uri " + requestIpUri.AbsoluteUri + " but was replaced with certificate from Uri " + requestFqdnUri.AbsoluteUri);
-                        }
+                            WriteLog("INF: Azure certificate found on Uri " + requestIpUri.AbsoluteUri + ":" + port + " but was replaced with certificate from Uri " + requestFqdnUri.AbsoluteUri + ":" + port);
                         cert2 = tempCertificate;
                     }
                 }
@@ -702,6 +713,8 @@ namespace CertificateScanner
                             sqlCmd2.Parameters.AddWithValue("@serialNumber", serialNumber);
                             sqlCmd2.Parameters.AddWithValue("@subjectAlternativeNames", subjectAlternativeNames);
                             sqlCmd2.ExecuteNonQuery();
+                            if (logLevel <= LogLevel.Trace)
+                                WriteLog("TRC: Certificate updated in sql. fqdn=" + hostnameFQDN + " port:" + port + " endpoint:" + endpoint + " subjectName=\"" + subjectName + "\" serialNumber=" + serialNumber);
                         }
                         connection.Close();
                     }
@@ -732,6 +745,8 @@ namespace CertificateScanner
                             sqlCmd.Parameters.AddWithValue("@lastScannedDate", GetDateTimeSQLString(DateTime.Now));
                             connection.Open();
                             sqlCmd.ExecuteNonQuery();
+                            if (logLevel <= LogLevel.Trace)
+                                WriteLog("TRC: Certificate added to sql. fqdn=" + hostnameFQDN + " port:" + port + " endpoint:" + endpoint + " subjectName=\"" + subjectName + "\" serialNumber=" + serialNumber);
                             connection.Close();
                         }
                     }
@@ -739,15 +754,13 @@ namespace CertificateScanner
                 else
                 {
                     if (logLevel <= LogLevel.Debug)
-                    {
-                        WriteLog("DBG: No certificate returned from endpoint " + endpoint + " or fqdn " + hostnameFQDN);
-                    }
+                        WriteLog("DBG: No certificate returned from endpoint " + endpoint + ":" + port + " or fqdn " + hostnameFQDN + ":" + port);
                 }
             }
             catch (Exception ex)
             {
-                if (logLevel <= LogLevel.Warning)
-                    WriteLog("WRN: ScanForCertificate(" + hostnameFQDN + "," + endpoint + "," + port + "," + dnsServerIP + "," + dnsServerZone + ") Exception: " + ex.ToString());
+                if (logLevel <= LogLevel.Error)
+                    WriteLog("ERR: ScanForCertificate(" + hostnameFQDN + "," + endpoint + "," + port + "," + dnsServerIP + "," + dnsServerZone + ") Exception: " + ex.ToString());
             }
         }
         private static string GetDateTimeSQLString(DateTime SomeTime)

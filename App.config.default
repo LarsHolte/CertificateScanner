@@ -33,6 +33,7 @@
     <add key="SNMPServer" value="10.1.1.4" />
     <!-- SQL config - replace DATABASEHOSTNAME, DATABASENAME, USERNAME, PASSWORD with your values -->
     <add key="SQLConnectionString" value="Data Source=DATABASEHOSTNAME;Initial Catalog=DATABASENAME;Persist Security Info=True;User ID=USERNAME;Password=PASSWORD" />
+    <add key="SQLTable" value="certificatesLog" />
     <!-- If the scanner failes to complete a scan within this period, send a notification -->
     <add key="MaxErrorDaysThreshold" value="3" />
     <!-- Certificates within these expire thresholds will trigger sending email and/or snmp notifications if enabled -->
