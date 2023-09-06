@@ -1,9 +1,8 @@
-﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 14
-VisualStudioVersion = 14.0.23107.0
+# Visual Studio Version 17
+VisualStudioVersion = 17.7.34024.191
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CertificateScanner", "CertificateScanner.csproj", "{2E265EA9-8720-48A5-8C36-1FE2CC376837}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CertificateScanner", "CertificateScanner.csproj", "{2E265EA9-8720-48A5-8C36-1FE2CC376837}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -18,5 +17,8 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {87D8CDBB-4FEC-4A74-8E0D-4DA808DC62B9}
 	EndGlobalSection
 EndGlobal

@@ -110,6 +110,9 @@ publish/
 # Publish Web Output
 *.Publish.xml
 
+# Publish profiles
+*.pubxml
+
 # Windows Azure Build Output
 csx
 *.build.csdef
